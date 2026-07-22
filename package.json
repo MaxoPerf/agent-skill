@@ -21,6 +21,7 @@
     "maxoperf-agent-skill": "install/installer.mjs"
   },
   "files": [
+    "README.md",
     "SKILL.md",
     "reference/",
     "install/",
