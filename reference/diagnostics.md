@@ -15,12 +15,17 @@ terminal run** (`passed` / `failed` / `cancelled`). Tool names + args are in
 - Always include the console deep link (`<console origin>/runs/<runId>`) with any finding — the user
   can break out to the full charts / error viewer.
 
+## Read the run's own failure first
+
+`get_run_status` returns `failure { cause, title, summary, detail }` + `runnerFailures[]`; quote
+`detail` (the engine's own words). Cause ids: `reference/browser-tests.md`.
+
 ## The signal catalog (what RCA correlates)
 
 | Signal | Tool | What it tells you |
 | --- | --- | --- |
 | **Which failure criteria tripped** | `get_run_summary` | The first-order "why failed" — the SLO/assertion/threshold that flipped the run red. Start here. |
-| **Actual errors — codes + bodies** | `get_run_error_bodies` | Status/response codes always; the real request/response **body text** only via the `row_id` detail route (concise = a ≤200-char snippet; `response_format:"detailed"` for the full redacted body). Quote the real error, don't just count it. |
+| **Actual errors — codes + bodies** | `get_run_errors` → `get_run_error_bodies { signature }` | Status/response codes always; the real request/response **body text** only via the `row_id` detail route (concise = a ≤200-char snippet; `response_format:"detailed"` for the full redacted body). Quote the real error, don't just count it. |
 | **Error logs** | `get_run_logs` | Error/warn engine + system log lines (`severity`, `stream` filters) — engine-side failures, connection resets, script exceptions. |
 | **Runner health & VU shortfall** | `get_runner_health` | Heartbeat + CPU/mem/process trend, and the headline diagnostic **`targetVus` vs `peakAchievedVus` → `vuShortfallPct`**. |
 | **Chart outliers** | `detect_run_anomalies` | Sustained statistical outliers on latency/throughput/error-rate/concurrency series. |

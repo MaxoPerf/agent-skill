@@ -87,6 +87,8 @@ Write the actual script file (e.g. a `.k6.js` or Playwright `.ts`) into the user
   or `iterations`, optional `targetRps`/`maxVirtualUsersPerRunner`).
 - The pass/fail criteria from Step 0 as checks/thresholds in the script where the executor supports
   it (e.g. k6 `thresholds`).
+- The same criteria as `failure_criteria` (they decide the verdict); `label` is `"ANY"` unless the
+  user names a real transaction (`list_test_labels`).
 - **No hard-coded secrets or environment-specific literals** — if the flow needs a credential or a
   per-env value, use a placeholder/env-var reference in the script and route the actual value
   through Step 5 (secrets guidance), never inline it.
@@ -137,14 +139,17 @@ Explain briefly, in beginner terms: uploaded scripts are stored and can be viewe
 workspace, and secrets need to rotate independently of the test script — so MaxoPerf keeps them
 separate and injects them into the runner's environment only at run time.
 
-Sequence (via `call_platform_api` — see `reference/mcp-tools.md`'s Secrets & bindings section):
+Sequence:
 
-1. Create/update the workspace secret: `POST /workspaces/{workspaceId}/secrets { name, value }`.
-2. Bind it to the test: `PUT /tests/{testId}/secret-bindings { bindings: [{ secretId, envName? }] }`
-   (`envName` must match `SECRET_[A-Za-z0-9_]{1,120}`).
+1. Create/update the secret: `call_platform_api` `POST /workspaces/{workspaceId}/secrets { name, value }`.
+2. Bind it: `bind_test_dependency { test_id, kind: "secret", entity_id, env_var_name? }`.
 3. Reference the resulting env var (e.g. `SECRET_API_KEY`) from the script instead of a literal.
 
 **Never** echo a secret's value back to the user in chat — only confirm the binding exists.
+
+**Test data (CSV bound to a test):** to tell a user where their bound dataset's file lands inside
+the runner, or to write a script that reads it, use `get_test_data_bindings` and see "Test data in
+scripts" in `reference/platform-features.md` — never guess the path/env var.
 
 ### Step 6 — Multi-env awareness
 
@@ -193,7 +198,7 @@ anomaly method's false-positive controls.
 - **On `failed`** (or a `passed`/`cancelled` run the user calls out as suspicious) — **auto-offer**
   root-cause analysis: "Want me to dig into why this failed?" If yes (or the user already asked
   "why did it fail"), drive `diagnose-run-failure { run_id }` (or the equivalent manual sequence:
-  `get_run_summary` → `get_run_errors` + `get_run_error_bodies` → `get_run_logs` →
+  `get_run_summary` → `get_run_errors` + `get_run_error_bodies { signature }` → `get_run_logs` →
   `get_runner_health` → `detect_run_anomalies`).
 - **On every terminal run, regardless of verdict** — **auto-run** the anomaly scan:
   `detect_run_anomalies { run_id }` (or `explain-run-anomalies { run_id }` for chat-only clients).
@@ -237,6 +242,13 @@ themselves, not a MaxoPerf test), **virtual services** (mock/simulate a target's
 inspection** (`inspect_url`, for JS-rendered pages `read_page_dom` can't see). Reach for these
 during intake/setup, not instead of the test loop — see `reference/platform-features.md` for the
 decision table and `reference/mcp-tools.md` for exact args.
+
+A **running** run can be steered live (`get_live_controls` first) — see "Live controls" in
+`reference/platform-features.md`.
+
+Dependencies, EUX probe, workspace notification rules: `reference/platform-features.md`.
+Workspace alerts, APM integrations, Git connections (config only, nothing evaluated/synced yet): `reference/platform-features.md`.
+CI/CD: `reference/ci-cd.md`.
 
 ## Non-negotiables (never violate these)
 

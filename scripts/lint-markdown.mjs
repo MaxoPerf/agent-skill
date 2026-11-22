@@ -14,6 +14,7 @@ const ROOT = join(__dirname, '..');
 const REQUIRED_FILES = [
   'SKILL.md',
   'reference/browser-tests.md',
+  'reference/ci-cd.md',
   'reference/engines.md',
   'reference/hotspot-patterns.md',
   'reference/mcp-tools.md',

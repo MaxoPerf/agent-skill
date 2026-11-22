@@ -25,10 +25,40 @@ a different shape. The platform detects the shape from content and wraps it when
   `runpy.run_path(..., run_name='__main__')` — the `run_name` is what makes an
   `if __name__ == '__main__':` guard actually fire (unwrapped: `Nothing to test`).
 
+## Playwright: which file runs, and the user's own config
+
+- **The uploaded script runs, whatever it is named.** `checkout.js`, `flow.ts` and `a.spec.ts` all
+  work — the platform generates the `playwright.config.ts` that points at exactly that file, for a
+  bare upload AND for a Taurus YAML `executor: playwright` scenario `script:`. Never rename a file
+  to `*.spec.ts` to "make it run".
+- **Keep the user's `playwright.config.*` — upload it as an asset, never as the entrypoint**
+  (a config as entrypoint fails validation with `playwright_config_as_entrypoint`). It is wrapped,
+  not replaced: their `use` (baseURL, viewport, timeouts…), `timeout`, `expect`, `retries` and
+  reporters (except html/json) apply; the platform forces `testDir`/`testMatch`/`testIgnore` (only the
+  entrypoint runs) and the browser `channel`/launch args. A CommonJS `.js` config next to an ESM
+  script is handled for you.
+- **Config `projects` → the test's browsers**: chromium / Desktop Chrome → `chrome`, msedge /
+  Desktop Edge → `edge`, firefox → `firefox`. **webkit, mobile devices and other channels are not
+  supported** (warning
+  `playwright_project_unsupported`; it will not run). The synced set shows on `get_test` as
+  `browsers` with `browsersSource: "playwright_config"`; a user edit (`browsersSource: "user"`)
+  wins over a later re-upload of the same config set.
+- **Validation is static and catches "no tests" before a run**: `playwright_no_runnable_tests`
+  (no `test(...)`/`describe(...)` and no library launch), `playwright_script_not_found` (the YAML
+  scenario's `script` was not uploaded), `playwright_script_not_supported` (not `.js/.ts/.mjs/
+  .cjs/.mts/.cts`). Warnings never block a run but explain one — read `validation.warnings` on
+  `get_test` and relay them.
+- **`waitUntil: 'networkidle'` / `waitForLoadState('networkidle')`** (warning `playwright_networkidle`, with file + line) may never
+  settle on pages with analytics, chat widgets or bot protection → navigation timeouts. Suggest
+  `waitUntil: 'load'` plus a locator wait (`await expect(page.getByRole(...)).toBeVisible()`).
+- **Runner size follows browsers per runner** on managed clouds: ≤3 → `s`, ≤6 → `m`, more → `l`
+  (the larger of that and the configured size). Each browser is a real process; overloaded runners
+  now fail as `runner_overloaded` — suggest fewer browsers (VUs) per runner or a larger size.
+
 ## Browser selection
 
-`browser` on the test is `chrome` | `edge` | `firefox`. All three are live-validated across every
-scripted form.
+`browsers` on the test is an ordered list of `chrome` | `edge` | `firefox` (`browser` is always
+`browsers[0]`, kept for old clients). All three are live-validated across every scripted form.
 
 - **`chrome` means real vendor Google Chrome**, not Chromium. A script calling `chromium.launch()`
   gets vendor Chrome automatically (the runner injects `channel: 'chrome'`); `edge` maps to
@@ -37,8 +67,35 @@ scripted form.
   `webdriver.Firefox()`); the platform pins the matching driver binary but cannot launch a
   different browser than the code asks for. Say so if the user's `browser` selection and their
   script disagree.
-- Multi-browser: run N separate runs, one per browser. There is no single run that drives several
-  browser types.
+- **Multi-browser in ONE run**: set `browsers: ['chrome','firefox']` (`create_test`, or
+  `PATCH /v1/tests/:id` `{"browsers": [...]}` via `call_platform_api` — send a JSON array, never a
+  string). Virtual users are split evenly (any remainder goes to the first browsers, in order), each browser gets its
+  own runner group, and VU-hours stay the same. Errors: `BROWSERS_MISMATCH` (`browser` ≠
+  `browsers[0]`), `BROWSERS_EXCEED_VUS` (each browser needs ≥1 VU), `BROWSER_NOT_STEERABLE` on save
+  (`PATCH` once the script is uploaded) and at run start (a Selenium test that picks its own
+  browser — a bare script, or a Taurus YAML scenario with a `script:` or its own
+  `browser`/`capabilities` — also a `browser_not_steerable` validation warning; select one browser,
+  or rebuild the flow as a Taurus `requests:` scenario or in the scriptless browser builder).
+  **Check `browsersSteerable` on `get_test` before sending more than one browser** — `false`
+  means `browsers` takes a single entry.
+- Chromium-family launches without a `channel` (`chromium.launch()`, `launchPersistentContext`,
+  `launchServer`) run on vendor Chrome (Edge on an `edge` run); Playwright's bundled Chromium is
+  not installed on runners.
+
+## Why a browser run failed — read it, don't guess
+
+`get_run_status` on a `failed`/`cancelled` run returns `failure { cause, title, summary, detail }`
+and `runnerFailures[]` (`runnerId`, `browser`, `cause`, `summary`, `detail`); `get_run_errors`
+attaches the same when the run has no error rows. `detail` is the engine's own error text
+(redacted, ≤1024 chars) — quote it. Named causes: `playwright_no_tests_found`, `script_load_error`,
+`script_dependency_missing`, `browser_launch_failed`, `browser_navigation_timeout`,
+`target_unreachable`, `script_error_all_iterations`, `engine_no_results`, `taurus_config_error`,
+`runner_overloaded` (fewer browsers per runner / larger size). They cover Selenium too. A browser run where no iteration passed is `failed` with one of these causes even if the engine exited 0 (a Playwright run cut by its duration whose finished tests all failed also ends `failed`; one cut while a test is still running writes no result and still ends `passed`). Correlate
+further only when the cause is generic.
+
+Playwright captures every failing response (status ≥400, or a `requestfailed` network error) and
+Selenium only while recording (Chrome: full body; Edge/Firefox: metadata only, samples written at
+session end) — read them with `get_run_error_bodies { signature }`.
 
 ## What a healthy browser run produces
 
@@ -105,6 +162,43 @@ script, or use the interactive builder. Do not promise these.
 
 `authoringMode: 'interactive'` + `interactiveKind: 'browser'` + `browserSteps`. No file upload.
 Use it when the user has no code. It produces the same live signals as a scripted run.
+
+**Page-contains assertion** (no locator; works in every browser-test authoring path):
+
+```jsonc
+{ "action": "assertPageContains", "text": "Order Confirmed", "match": "contains", "ignoreCase": false, "negate": false }
+{ "action": "assertPageContains", "text": "Order #\\d+", "match": "regex", "ignoreCase": true }
+{ "action": "assertPageContains", "text": "Fatal error", "match": "contains", "negate": true }   // fails when the text IS present
+```
+
+It tests the visible text (`innerText`) of the CURRENT frame at run time (after `switchFrame`; the TOP
+frame at compile time; child-frame text is never merged). `contains` collapses whitespace; `regex` sees
+the raw text (use `[\s\S]` to span lines). Max 500 characters; invalid patterns are rejected at save, and
+a pattern that hangs the page can still stall a run, so keep patterns simple. A miss FAILS the step after
+waiting up to ~5 s for the text to appear; use an explicit `waitFor`/`pauseFor` for longer waits.
+
+## Dependency references (interactive `urlBase` / `go` / `openWindow`)
+
+A `go` step's `url` and an `openWindow` step's `target` (also the interactive HTTP builder's
+`urlBase` — see `reference/platform-features.md`'s "Test data in scripts" for the analogous CSV
+path) can carry a **live dependency reference** instead of a literal string, so the target tracks a
+tunnel or virtual service instead of a URL frozen at build time:
+
+```jsonc
+{ "kind": "dependency", "dependencyKind": "virtual_service" /* or "tunnel" */, "entityId": "vs-0123456789", "envVarName": "PETSTORE" }
+```
+
+It renders to `${MAXOPERF_RUNTIME__MAXOPERF_VS_PETSTORE_URL}` (tunnel: `MAXOPERF_TUNNEL_<name>_URL`)
+at run time — the same runtime-secrets placeholder form secret references already use, so no runner
+change is needed. To reach a path under it, add `"path": "/checkout"` to the browser step value
+(appended after the URL); in the HTTP builder the request's own `url` is appended to `urlBase`.
+Valid ONLY on `go.url` / `openWindow.target` (and the HTTP builder's `urlBase`) —
+any other step/field rejects it. Use a **tunnel** when the target is running locally or not yet
+deployed, a **virtual service** when it's a mock standing in for a flaky/costly real dependency (see
+`reference/platform-features.md`'s decision table) — build the reference with `bind_test_dependency`
+first (Dependencies, `reference/mcp-tools.md`) so the binding exists, then reference its
+`entity_id`/`env_var_name` here; saving the test auto-creates/reconciles an `origin: 'inline'`
+binding for you either way, but the console's own picker always binds first.
 
 ## Validating a browser test you just built
 
