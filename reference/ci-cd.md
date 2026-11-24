@@ -19,7 +19,7 @@ One YAML file per test, committed with its script and data files. `push` syncs e
 criteria. Start from an existing test: `export_test_as_code { test_id }` returns `{ filename, yaml, files }`
 where each file has the repository path to commit it at. Secret values are never exported, only binding
 names. VarioTests, builder tests, browser tests and tests with aliased or inline bindings are refused with
-`422 EXPORT_UNSUPPORTED_TEST` and `details.reasons`: relay the reasons, do not hand-write around them.
+`422 EXPORT_UNSUPPORTED_TEST` and `details.reasons`: relay the reasons, do not hand-write around them. `export_resource { kind: "test", id }` exports the kinds it refuses (see "Resources as code" in `reference/platform-features.md`).
 
 ## GitHub Action
 

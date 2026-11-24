@@ -198,6 +198,7 @@ workspace secret id) at install, or `webhook_target` via `update_virtual_service
 full), failures first. Needs a runtime on config >= 3: `get_virtual_service.runtimeSupportsLibrary` false
 means redeploy. Custom transactions take `response.webhooks` (<= 5, snake_case in MCP) and template
 captures take `as: "json"`; invalid specs are `400 VS_WEBHOOK_INVALID` naming the path.
+The `hmac` signer also has a template mode for vendors that sign `timestamp + body` into their own headers: `message` (must contain `{body}`; also `{timestamp}`, `{id}`, `{url}`), `headers` (1-4, values use `{signature}`/`{timestamp}`/`{id}`), `timestamp` (`s`|`ms`|`iso`), `secret_encoding` (`utf8`|`hex`); needs runtime config >= 4, else `409 VS_RUNTIME_UPGRADE_REQUIRED` (redeploy). The library tools omit each pack's `logoDataUri` (console-only).
 
 **Limits.** State is capped per collection per caller (the pack's `limits`); installed groups are hidden
 from the Groups list by default and removed with the VS.
@@ -969,6 +970,12 @@ Starting again while the SAME test's compile runs returns the same `running` + `
 A compile running for a DIFFERENT test answers `AI_STEPS_COMPILE_IN_PROGRESS` (it is never replaced; the message
 carries its `sessionId`/`compileId`): poll that one, or wait a minute and call `list_browser_step_versions` to find the new version.
 
+## Deleting things (soft delete)
+
+Tests, runs, PDCs and teams are **soft-deleted**: hidden from lists and not reachable by id, never physically removed. `delete_test {test_id}` and `delete_run {run_id}` (also on Loadrigo) are blocked while a run is in progress / the run is not finished (409 `TEST_HAS_ACTIVE_RUN`, `RUN_NOT_TERMINAL`); a test used by a VarioTest is blocked (`TEST_IN_VARIOTEST`). A deleted test's past runs stay visible, labelled as a deleted test. `delete_private_datacenter` (409 `PDC_IN_USE` with a blocker list) and `delete_team` (409 `SYSTEM_TEAM`) need `confirm_name` equal to the entity name and are **not** on Loadrigo. CLI: `maxoperf delete test|run|pdc|team <id>`.
+
+`maxoperf push` matches tests **by name**, so it re-creates a test that was deleted in the console.
+
 ## Account administration
 
 - **Tags** are free-form labels on tests and runs. `list_account_tags` is the catalogue; renaming or deleting
@@ -1036,6 +1043,15 @@ Two-chart example (line + treemap), from a latency + error dashboard:
 
 An invalid `layout` comes back as a normal tool error (`isError: true`) with the server's
 validation message — read it and fix the layout rather than guessing again from scratch.
+
+## Resources as code (export, schemas, applying)
+
+Every resource kind (tests, configs, virtual services, fleets, alert rules, datasets and more) has a file format. `list_resource_kinds` returns the kinds (kind, plural = the `.maxoperf/<plural>/` directory, scope, apply order, schema URL); `get_resource_schema {kind, version?}` returns the published JSON Schema to author or validate a file against.
+
+- `export_resource {kind, id}` returns `{ kind, id, key, placement, filename, yaml, files }` for one resource by its entity id (never a `maxoperf://` URI). Without `id` it exports many (`workspace_id`, `project_id`, `kind` narrow it) as `{ documents, files, skipped, truncated, nextCursor }`. If `truncated` is true the export is incomplete: call again with `cursor = nextCursor` until `truncated` is false, and say so rather than presenting a partial result as complete. `skipped` lists what could not be exported (`{kind, count, reasons:["forbidden"]}` = resources the caller cannot view). A resource you cannot view is a 404; one the format cannot express exactly is `422 EXPORT_UNSUPPORTED_RESOURCE` (relay `details.reasons`). Secret values are never exported, only `valueFrom` bindings. `export_test_as_code` keeps its older behaviour; for the tests it refuses (vario, builder, functional, browser) use `export_resource` with `kind: test`.
+- References between resources are `maxoperf://<kind>/<key>` URIs (`maxoperf://<kind>/name:<name>` for a target that is not exported). Apply order follows the kind order from `list_resource_kinds` (lower first), so bind a virtual service, secret or config to a test by reference in the test file.
+- Applying: plan and apply run in the `maxoperf` CLI or the GitHub Action (`maxoperf plan`, `maxoperf apply`, `--prune`), never through MCP, because they need the repo files and a client-side engine. Through MCP, create or update with the per-resource tools (`create_test`, `create_config_value`, `upsert_alert_rule`, ...). `list_tests` takes `tag` (repeatable, matches ANY).
+- The ownership ledger (`/v1/resources/ledger*`: which repo file owns which resource, plus the sync lock) is engine-internal. `call_platform_api` may read it with GET, but every write (PUT/POST/PATCH/DELETE) is rejected: the engine writes it with its own CLI key, and an agent that could write it could forge or steal prune ownership (the ability to make `--prune` delete a resource).
 
 ## CI/CD and GitHub Actions
 
