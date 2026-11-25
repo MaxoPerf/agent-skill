@@ -920,6 +920,74 @@ saved by convert. On an existing virtual service pass `virtual_service_id`: `vs-
 `source_text: {text, edited: false}` on `create_vs_transaction` / `update_vs_transaction` so the console
 shows the AI origin; a later manual edit flips `edited` server-side. These calls can take up to ~80 s.
 
+## Script thresholds (k6 and Taurus YAML tests)
+
+A k6 script's own `options.thresholds` and a Taurus YAML's `passfail` rows are either copied into the test's
+failure criteria (shown with a "From script" tag) or ignored. The setting is
+`failureCriteriaSettings.scriptThresholds`: `copy` (the default when absent) or `ignore` (nothing is copied;
+earlier copies are removed). Once the test is synced (`scriptThresholds` is not null) k6 runs with `--no-thresholds`, so MaxoPerf
+failure criteria are the only judge: a threshold in the script, `abortOnFail` included, never stops a run on
+its own, and the run's system log shows `K6_ENGINE_THRESHOLDS_OFF`. If the Taurus YAML keeps
+`--no-thresholds` from being set — a `~modules` / `^modules` / `$modules` override, `included-configs`, or a
+trailing `^k6` in the Taurus YAML — the log warns
+`K6_ENGINE_THRESHOLDS_NOT_OFF` instead: k6 may still fail or abort the run on a script threshold, so remove
+that cause. A never-synced test reports
+`scriptThresholds: null` and k6 still evaluates the script's thresholds; picking `copy` or `ignore` syncs
+it. A script's own `exec.test.abort()` still ends the run.
+
+MaxoPerf reads a k6 script's thresholds from its exported `options` object literal without running the script.
+They are unreadable (`K6_THRESHOLDS_UNREADABLE` lists the reason; nothing is copied) when `options` is not a
+plain literal (built by a call, a spread); the literal has a getter, setter, method, function value (also
+inside an array or a `?:` / `||` branch) or `__proto__` key anywhere inside; the script changes `options` or a part of it, also through an alias
+(`const o = options`): assignment, `++`, `delete`, a mutating method such as `.push` / `.sort`; or the script
+hands `options` or an object / array inside it to other code: passes it to a function, calls a method on it
+other than a read-only one (callback methods such as `options.stages.forEach(…)` count), copies it (`{ ...options }`,
+`Object.assign({}, options)`), stores it in a global or returns it. Readable: reading values, `console.*`,
+`JSON.stringify` whose replacer is absent, `null`, `undefined`, an array literal or a `const` bound to one,
+`Object.keys` / `values` / `entries`, read-only methods (`includes`, `join`), `__ENV` reads; a number or
+string read from `options` can go anywhere, also by array position (`options.stages[0].target`) or in a
+`for…of` loop (`for (const s of options.stages) sleep(s.target)`; in a loop it must be a number or string in
+every element). Limit: a change the text does not show plainly (a getter defined elsewhere, a patched
+prototype, a property name built at run time, an imported module) is not detected, and the copy follows the
+script's text. Criteria copied from an earlier readable version stay, still tagged "From script", until a
+readable version replaces them, you delete them, or you choose `ignore`.
+
+Set the mode at create time with `create_test` `script_thresholds`, or switch it later with
+`set_test_script_thresholds(test_id, mode)`. The tool reads the test, PATCHes the full settings object, then
+re-reads it, so the returned `failureCriteriaSettings` and `failureCriteria: { copied, user }` counts are what
+is stored. Errors:
+
+- `NOT_APPLICABLE` — not a k6 / Taurus YAML test (a VarioTest master is refused before any write). A test
+  with no validated script yet is accepted; the first sync that reads its validated script (upload, edit or
+  revalidate) applies it.
+- `NOT_APPLIED` — the re-read mode is not the one requested.
+- `503 SCRIPT_THRESHOLDS_SYNC_FAILED` — the mode was not applied and nothing else changed; retry.
+- `APPLIED_REREAD_FAILED` — the update was accepted; reading the test back failed. Call `get_test` to see
+  whether the mode was applied.
+
+`validation.importWarnings` (`get_test`) mixes three kinds of `{ code, message, count? }`; the tool returns them split
+(`count` on a `…_TRUNCATED` row = how many it stands for):
+
+- `notEnforced` — thresholds that could not be copied (custom metrics, `checks`, min/max/med, `==`,
+  non-literal options, an unreadable script; `K6_THRESHOLD_WARNINGS_TRUNCATED` = more than listed).
+  **Nothing enforces them** (an unreadable script keeps its earlier copies, above). Any code not named below lands here.
+- `copiedWithChanges` — copied and enforced, with a change: `K6_DELAY_ABORT_EVAL_DROPPED` (its
+  `delayAbortEval` is not applied), `K6_THRESHOLD_NOTES_TRUNCATED` (more such notes than listed).
+- `notices` — about the sync, not a threshold: `SCRIPT_THRESHOLDS_SYNC_FAILED` (retry with
+  `call_platform_api { method: 'POST', path: '/tests/{testId}/files/{fileId}/revalidate' }` on the entry
+  file — `fileId` from `list_test_files` — or pick a mode again); `LOAD_PROFILE_SYNC_FAILED` only on older
+  stored rows.
+
+`LOAD_PROFILE_SYNC_FAILED` (the script's load profile could not be synced; revalidate the file to retry), and a
+`SCRIPT_THRESHOLDS_SYNC_FAILED` that could not be stored with the test, appear in `get_test` `validation.warnings`.
+
+Without MCP: `GET /v1/tests/{id}`, then `PATCH /v1/tests/{id}` with the FULL `failureCriteriaSettings` object
+(`{ ...current, scriptThresholds }`) — settings are replaced on PATCH, so a `{ scriptThresholds }`-only body
+resets verdict mode and early stop. A `503 SCRIPT_THRESHOLDS_SYNC_FAILED` there means the PATCH's other fields
+were saved but the mode and copied criteria are unchanged. Send `body` as a JSON object; if your client
+stringifies it, use `set_test_script_thresholds` or the CLI. As code: `failureCriteriaSettings: { scriptThresholds: copy | ignore }` in the
+test file; `maxoperf push` sends it.
+
 ## AI steps — numbered lines into a compiled browser test
 
 When the user describes a browser flow as numbered lines ("1 go to … 2 add an item to the basket …

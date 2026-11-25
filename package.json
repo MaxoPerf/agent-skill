@@ -1,6 +1,6 @@
 {
   "name": "@maxoperf/agent-skill",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shippable customer-facing MaxoPerf agent skill — markdown workflow + MCP tool bindings, installed into a customer's own IDE agent (Claude Code / Cursor / Codex).",
   "keywords": [
     "maxoperf",
